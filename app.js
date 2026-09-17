@@ -1,10 +1,11 @@
+import {defaultModel} from './model-default.js?v=20260917';
 import {selectRoleVoice} from './role-voice.js';
 import {AudioCapture} from './audio-capture.js';
 const audioCapture=new AudioCapture();
-import {Conversation} from './conversation.js';
+import {Conversation} from './conversation.js?v=20260917';
 import {AuthSession,authMessage} from './auth-session.js';
 import { API_BASE } from './config.js';
-import { Voice } from './voice.js';
+import { Voice } from './voice.js?v=20260917';
 import { checkCustomerText } from './privacy.js';
 
 const $ = selector => document.querySelector(selector);
@@ -73,7 +74,20 @@ function localSet(key,value) { try{localStorage.setItem(key,JSON.stringify(value
 function preferences() { return state.user ? `hao.${state.user.uid}.preferences` : 'hao.visitor.preferences'; }
 function historyKey() { return `hao.${state.user?.uid}.summaries`; }
 function savePrefs() { localSet(preferences(),{activeId:state.activeId,voiceURI:state.voiceURI,maleVoiceURI:state.maleVoiceURI,femaleVoiceURI:state.femaleVoiceURI,rate:state.rate,voiceConsent:state.voiceConsent,autoSpeak:state.autoSpeak}); }
-const voice = new Voice(()=>{ const el=$('#voice-state');if(el){el.textContent=voice.status;el.classList.toggle('recording',voice.listening);} const roleLabel=$('#role-voice-label');if(roleLabel)roleLabel.textContent=roleVoiceLabel(); });
+function syncVoiceControls(){
+  const list=voice.chineseVoices;
+  for(const [id,preference,label] of [['voice-select','voiceURI','裝置預設中文音色'],['maleVoiceURI','maleVoiceURI','自動選擇台灣中文男聲'],['femaleVoiceURI','femaleVoiceURI','自動選擇台灣中文女聲']]){
+    const select=document.getElementById(id);if(!select)continue;
+    const signature=list.map(v=>v.voiceURI).join('|');if(select.dataset.voices===signature)continue;
+    select.dataset.voices=signature;
+    select.innerHTML=`<option value="">${label}</option>`+list.map(v=>`<option value="${esc(v.voiceURI)}">${esc(v.name)} · ${esc(v.lang)}</option>`).join('');
+    select.value=list.some(v=>v.voiceURI===state[preference])?state[preference]:'';
+    if(id==='voice-select'&&select.nextElementSibling)select.nextElementSibling.textContent=list.length?`偵測到 ${list.length} 個中文音色。`:'裝置尚未提供中文音色清單；朗讀時會再自動偵測。';
+  }
+}
+const voice = new Voice(()=>{queueMicrotask(()=>{const el=$('#voice-state');if(el){el.textContent=voice.status;el.classList.toggle('recording',voice.listening);} const roleLabel=$('#role-voice-label');if(roleLabel)roleLabel.textContent=roleVoiceLabel();syncVoiceControls();});});
+window.addEventListener('focus',()=>voice.refresh());
+setTimeout(()=>voice.refresh(),500);setTimeout(()=>voice.refresh(),2000);
 async function loadUser(strict=false) {
   try {
     const me=await api('/api/me');state.user=me.user;state.credentials=me.credentials.filter(c=>c.provider==='google');
@@ -118,7 +132,7 @@ function phoneExample() {
 }
 function phoneChat() {
   const p=state.phone;
-  return `${header('把這裡，當作一次真實對話。',p.mode==='practice'?'你是業務，AI 是客戶。先確認對方是否方便，再自然地說明來意。':'你是客戶，AI 是業務。可以提出疑問，觀察教練的示範。','PRACTICE · 正在演練')}<div class="chat-layout"><section class="panel chat"><div class="chat-header"><div class="flex"><span class="avatar">${p.mode==='practice'?'客':'豪'}</span><strong>${p.mode==='practice'?'模擬客戶':'豪老師 · 示範業務'}</strong><span class="badge">${state.phoneDraft?.difficulty||'入門'}</span></div><span>已練習 ${p.messages.filter(m=>m.role==='user').length} 輪</span></div><div class="chat-messages" id="chat-messages">${p.messages.map(m=>`<div class="bubble-wrap ${m.role}"><div class="bubble-label">${m.role==='user'?'你':m.role==='coach'?'教練 · 暫停並修正':p.mode==='practice'?'模擬客戶':'教練示範'}</div><div class="bubble">${esc(m.content)}</div>${m.concern?`<div class="hint warn" style="margin-top:10px"><strong>${m.concern.level==='violation'?'需修正的表達':'合規疑慮，先釐清'}</strong><p>${esc(m.concern.reason)}</p><strong>試著重說：</strong><br>${esc(m.concern.replacement)}</div>${sourceHtml(m.source,m.concern.reference)}`:''}</div>`).join('')}</div><form class="chat-input" id="turn-form">${p.mode==='practice'?`<label class="check"><input type="checkbox" id="audio-consent" ${p.audioConsent?'checked':''} ${p.ended?'disabled':''}><span>本場聲音評估：同意在「開始語音對話」時暫存我的發言（最多 3 分鐘），結束後送給 Google Gemini 評估語調、流暢度與表達穩定度。使用所選模型的免費額度；不另接付費語音服務。單句語音輸入與打字不錄音。取消勾選會清除錄音。</span></label><p class="hint">已暫存 ${p.audioClips?.length||0} 句聲音。原始錄音不寫入 App 資料庫；重整、登出或換場會清除。請勿口述個資。</p>`:''}<label class="field" for="message">${p.ended?'本場已結束，請查看回饋':'換你說一句'}</label><textarea id="message" name="message" maxlength="1200" placeholder="點麥克風說話，或在這裡輸入…" ${p.ended?'disabled':''}></textarea><div class="flex">${btn(icon('mic')+' 開始語音對話','conversation','primary',p.ended?'disabled':'')}${btn('單句語音輸入','mic','secondary',p.ended?'disabled':'')}${btn(icon('stop')+' 停止','voice-stop','secondary')}<button class="button" type="submit" ${p.ended?'disabled':''}>送出這一句 ${icon('arrow')}</button></div><div id="voice-state" class="voice-state" style="margin-top:12px">麥克風未開啟</div><div class="chat-hint">本場先完整演練，結束後才逐句查核與指正。語音對話會自動送出辨識完成的句子；按停止可暫停。請勿口述客戶個資，辨識不清時可改用文字。</div>${statusBox()}</form><div class="flex" style="padding:0 22px 20px">${btn('結束並查看回饋','feedback','secondary',!p.messages.some(m=>m.role==='user')?'disabled':'')}${btn('再看參考範例','show-example','ghost')}</div></section><aside class="panel chat-side"><div class="step-label">YOUR COACH IS HERE</div><h3>不必急著成交，<br>先練好這次邀約。</h3><p>聽懂對方的顧慮，用一句簡單的話接住，再提出下一步。</p><div class="hint">遇到卡住的地方也沒關係。教練會在結束後，先肯定亮點，再一起調整。</div><p class="hint" id="role-voice-label">${esc(roleVoiceLabel())}</p><div class="source">本場模型：${esc(p.model)}<br>本場保持角色與模型一致。</div></aside></div>`;
+  return `${header('把這裡，當作一次真實對話。',p.mode==='practice'?'你是業務，AI 是客戶。先確認對方是否方便，再自然地說明來意。':'你是客戶，AI 是業務。可以提出疑問，觀察教練的示範。','PRACTICE · 正在演練')}<div class="chat-layout"><section class="panel chat"><div class="chat-header"><div class="flex"><span class="avatar">${p.mode==='practice'?'客':'豪'}</span><strong>${p.mode==='practice'?'模擬客戶':'豪老師 · 示範業務'}</strong><span class="badge">${state.phoneDraft?.difficulty||'入門'}</span></div><span>已練習 ${p.messages.filter(m=>m.role==='user').length} 輪</span></div><div class="chat-messages" id="chat-messages">${p.messages.map(m=>`<div class="bubble-wrap ${m.role}"><div class="bubble-label">${m.role==='user'?'你':m.role==='coach'?'教練 · 暫停並修正':p.mode==='practice'?'模擬客戶':'教練示範'}</div><div class="bubble">${esc(m.content)}</div>${m.concern?`<div class="hint warn" style="margin-top:10px"><strong>${m.concern.level==='violation'?'需修正的表達':'合規疑慮，先釐清'}</strong><p>${esc(m.concern.reason)}</p><strong>試著重說：</strong><br>${esc(m.concern.replacement)}</div>${sourceHtml(m.source,m.concern.reference)}`:''}</div>`).join('')}</div><form class="chat-input" id="turn-form">${p.mode==='practice'?`<label class="check"><input type="checkbox" id="audio-consent" ${p.audioConsent?'checked':''} ${p.ended?'disabled':''}><span>本場聲音評估：同意在「開始語音對話」時暫存我的發言（最多 3 分鐘），結束後送給 Google Gemini 評估語調、流暢度與表達穩定度。使用所選模型的免費額度；不另接付費語音服務。單句語音輸入與打字不錄音。取消勾選會清除錄音。</span></label><p class="hint">已暫存 ${p.audioClips?.length||0} 句聲音。原始錄音不寫入 App 資料庫；重整、登出或換場會清除。請勿口述個資。</p>`:''}<label class="field" for="message">${p.ended?'本場已結束，請查看回饋':'換你說一句'}</label><textarea id="message" name="message" maxlength="1200" placeholder="點麥克風說話，或在這裡輸入…" ${p.ended?'disabled':''}></textarea><div class="flex">${btn(icon('mic')+' 開始語音對話','conversation','primary',p.ended?'disabled':'')}${btn('單句語音輸入','mic','secondary',p.ended?'disabled':'')}${btn('播放上一句並繼續','replay-reply','secondary',p.ended?'disabled':'')}${btn(icon('stop')+' 停止','voice-stop','secondary')}<button class="button" type="submit" ${p.ended?'disabled':''}>送出這一句 ${icon('arrow')}</button></div><div id="voice-state" class="voice-state" style="margin-top:12px">${esc(voice.status)}</div><div class="chat-hint">本場先完整演練，結束後才逐句查核與指正。按一次開始，聽到提示後即可說話；AI 說完會自動繼續收音。短暫安靜不用再按開始。請保持本頁開啟；按停止可暫停。請勿口述客戶個資，辨識不清時可改用文字。</div>${statusBox()}</form><div class="flex" style="padding:0 22px 20px">${btn('結束並查看回饋','feedback','secondary',!p.messages.some(m=>m.role==='user')?'disabled':'')}${btn('再看參考範例','show-example','ghost')}</div></section><aside class="panel chat-side"><div class="step-label">YOUR COACH IS HERE</div><h3>不必急著成交，<br>先練好這次邀約。</h3><p>聽懂對方的顧慮，用一句簡單的話接住，再提出下一步。</p><div class="hint">遇到卡住的地方也沒關係。教練會在結束後，先肯定亮點，再一起調整。</div><p class="hint" id="role-voice-label">${esc(roleVoiceLabel())}</p><div class="source">本場模型：${esc(p.model)}<br>本場保持角色與模型一致。</div></aside></div>`;
 }
 function reviewHtml(f){
   return '<div class="section-head"><h2>本場逐句合規檢討</h2></div><p>已檢視 '+esc(f.reviewedTurns??'—')+' 句'+(f.demo?' AI 業務示範':'學員業務話術')+'。</p>'+(f.violations?.length?f.violations.map(v=>'<article class="result-card"><h3>第 '+esc(v.turn)+' 句 · '+esc(v.issue||'合規表達')+'</h3><p><strong>'+(v.level==='violation'?'需修正':v.level==='unverified'?'待補查規定':'合規疑慮')+'</strong></p><blockquote>'+esc(v.original)+'</blockquote><p>'+esc(v.reason)+'</p><p><strong>建議重說：</strong>'+esc(v.replacement)+'</p>'+(v.reference?sourceHtml(v.source,v.reference):'<p>目前官方來源不足，不作確定違規判定，需補查相應規定。</p>')+'</article>').join(''):'<p>本次檢查未發現需列出的問題；不代表所有法規與自律規範均已涵蓋。</p>');
@@ -237,7 +251,8 @@ document.addEventListener('click',async e=>{
       location.hash='settings';render();
       toast('已保留情境。請確認模型後按「儲存並開始」；更換後的語音演練會開新場次。');
     });
-    if(action==='conversation'&&requireVoiceConsent()){conversation.start();}
+    if(action==='conversation'&&requireVoiceConsent()){conversation.start('語音已開啟，請開始說話。');}
+    if(action==='replay-reply'&&requireVoiceConsent()){const last=state.phone?.messages.filter(m=>m.role==='assistant').at(-1);conversation.start(last?.content||'語音已開啟，請開始說話。');}
     if(action==='go-login')location.hash='login';
     if(action==='reload-config')await work('正在重新連線…',async()=>{await loadConfig();await loadUser();render();});
     if(action==='close-modal')$('#modal').close();
@@ -249,7 +264,7 @@ document.addEventListener('click',async e=>{
     if(action==='local-login')await work('正在開啟本機測試帳號…',async()=>{await api('/api/auth/local','POST',{});setToken('');await loadUser(true);location.hash='home';render();});
     if(action==='sample') {const examples={family:{gender:'未提供',age:'年約 40 歲',background:'雙薪家庭，有一位學齡孩子，工作忙碌，最近開始關心家庭保障。'},retire:{gender:'未提供',age:'年約 58 歲',background:'預計數年後退休，有成年子女，希望了解退休後生活安排與醫療保障。'},young:{gender:'未提供',age:'年約 26 歲',background:'剛開始工作，收入穩定但預算有限，對保險不熟悉，希望先了解基本保障。'}};state.customer=examples[target.dataset.sample];render();}
     if(action==='use-pain'){state.phoneDraft={purpose:state.pain.answer.pains[Number(target.dataset.index)].opening};state.phone=null;state.feedback=null;location.hash='phone';}
-    if(action==='inspect-key')await work('驗證金鑰並載入目前模型…',async()=>{const key=$('#api-key').value.trim();const provider=$('#provider').value;const r=await api('/api/credentials/inspect','POST',{provider,key});state.models=r.models;state.inspected=true;state.provider=provider;state.localImport=false;state.editingId=null;render();$('#api-key').value=key;if(!r.models.length)toast('目前沒有可用的相容免費模型，請稍後重試。');});
+    if(action==='inspect-key')await work('驗證金鑰並載入目前模型…',async()=>{const key=$('#api-key').value.trim();const provider=$('#provider').value;const r=await api('/api/credentials/inspect','POST',{provider,key});state.models=r.models;state.selectedModel=defaultModel(r.models);state.inspected=true;state.provider=provider;state.localImport=false;state.editingId=null;render();$('#api-key').value=key;if(!r.models.length)toast('目前沒有可用的相容免費模型，請稍後重試。');else if(!state.selectedModel)toast('此 Key 的模型清單未提供 Gemini Flash-Lite Latest，請選擇其他可用模型。');});
     if(action==='select-credential'){state.activeId=target.dataset.id;savePrefs();render();toast('已選用這個連線，下次會記住。');}
     if(action==='edit-credential')await work('重新確認可用模型…',async()=>{const r=await api(`/api/credentials/${target.dataset.id}/models`);state.models=r.models;state.provider=r.credential.provider;state.selectedModel=r.credential.model;state.editingId=r.credential.id;state.localImport=false;state.inspected=true;render();if(!r.models.some(m=>m.id===r.credential.model))toast('上次模型目前不可用，請手動重選。');});
     if(action==='delete-credential')openModal('移除已保存的 Key？',`<p>App 將刪除這把加密 Key 及其模型偏好。若要撤銷金鑰，仍需到原平台操作。</p>${btn('確定移除','confirm-delete-key','danger',`data-id="${target.dataset.id}"`)}`);

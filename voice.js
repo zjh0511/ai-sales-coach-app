@@ -8,17 +8,22 @@ export class Voice {
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.stop(); });
   }
   get chineseVoices() { return this.voices.filter(v => /^zh|cmn/i.test(v.lang)).sort((a,b) => Number(/^zh[-_]TW$/i.test(b.lang)) - Number(/^zh[-_]TW$/i.test(a.lang)) || Number(b.localService) - Number(a.localService)); }
-  stop() { clearTimeout(this.timer); const old = this.recognition; this.recognition = null; this.utterance = null; old?.abort(); this.synth?.cancel(); this.listening = false; this.speaking = false; this.status = '已停止收音與播放'; this.onState?.(); }
+  stop() { clearTimeout(this.timer); clearTimeout(this.speechTimer); const old = this.recognition; this.recognition = null; this.utterance = null; old?.abort(); this.synth?.cancel(); this.listening = false; this.speaking = false; this.status = '已停止收音與播放'; this.onState?.(); }
   speak(text, voiceURI, rate = 1, onDone, onError) {
     if (!this.synth) throw new Error('這個瀏覽器不支援朗讀，請使用文字閱讀。');
     this.stop();
+    this.refresh();
     const sentence = new SpeechSynthesisUtterance(text); this.utterance = sentence;
-    sentence.lang = 'zh-TW'; sentence.rate = Number(rate) || 1;
+    sentence.lang = 'zh-TW'; sentence.rate = Number(rate) || 1; sentence.volume = 1;
     sentence.voice = this.voices.find(v => v.voiceURI === voiceURI) || this.chineseVoices[0] || null;
+    if(sentence.voice)sentence.lang=sentence.voice.lang;
     this.status = '正在準備朗讀…'; this.onState?.();
-    sentence.onstart = () => { if(this.utterance !== sentence)return; this.speaking = true; this.status = '教練正在朗讀…'; this.onState?.(); };
-    sentence.onend = () => { if(this.utterance !== sentence)return; this.speaking = false; this.status = '朗讀已完成'; this.onState?.(); onDone?.(); };
-    sentence.onerror = e => { if(this.utterance !== sentence)return; this.speaking = false; this.status = ['canceled','interrupted'].includes(e.error) ? '播放已停止' : '此瀏覽器未能播放音訊，請在桌面 Chrome／Edge 試聽。'; this.onState?.(); onError?.(this.status); };
+    const fail=()=>{if(this.utterance!==sentence)return;clearTimeout(this.speechTimer);this.utterance=null;this.speaking=false;this.synth.cancel();this.status='裝置未能播放聲音。請確認媒體音量，按「播放上一句並繼續」重試。';this.onState?.();onError?.(this.status);};
+    sentence.onstart = () => { if(this.utterance !== sentence)return; clearTimeout(this.speechTimer);this.speaking = true; this.status = '教練正在朗讀…'; this.onState?.();this.speechTimer=setTimeout(fail,Math.max(30000,text.length*1000)); };
+    sentence.onend = () => { if(this.utterance !== sentence)return; clearTimeout(this.speechTimer);this.utterance=null;this.speaking = false; this.status = '朗讀已完成'; this.onState?.(); onDone?.(); };
+    sentence.onerror = fail;
+    this.speechTimer=setTimeout(fail,10000);
+    this.synth.resume?.();
     this.synth.speak(sentence);
   }
   listen(onText, onError, onEnd) {
@@ -26,6 +31,9 @@ export class Voice {
     if (!window.isSecureContext) throw new Error('麥克風需要安全連線或本機預覽環境。');
     this.stop();
     const rec = new this.Recognition(); this.recognition = rec;
+    let release;
+    this.recognitionReleased=new Promise(resolve=>{release=resolve;});
+    this.releaseRecognition=release;
     let finalText = '', failed = false;
     const finish = () => {
       if(this.recognition!==rec)return;
@@ -50,10 +58,18 @@ export class Voice {
     rec.onerror = e => {
       if(this.recognition!==rec)return;
       const messages = { 'not-allowed': '麥克風權限未開啟，請在瀏覽器允許後重試。', 'audio-capture': '找不到可用的麥克風。', 'no-speech': '沒有聽到聲音，請靠近麥克風再試一次。', network: '語音辨識服務連線失敗，可先輸入文字。', 'service-not-allowed': '瀏覽器不允許使用這個語音服務，可先用文字練習。' };
+      // Normal mobile silence ends this recognition turn, not the conversation.
+      if(e.error==='no-speech')return;
       failed=true;
       if (e.error !== 'aborted') { this.status = messages[e.error] || '語音辨識暫時無法使用，請重試。'; onError(this.status); }
     };
-    rec.onend = finish;
+    rec.onend = () => {release();finish();};
     rec.start(); this.timer = setTimeout(() => rec.stop(), 45000);
+  }
+  async waitForRecognitionEnd(){
+    if(!this.recognitionReleased)return;
+    let timer;
+    try{await Promise.race([this.recognitionReleased,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('裝置尚未釋放麥克風，請按「播放上一句並繼續」重試。')),5000);})]);}
+    finally{clearTimeout(timer);}
   }
 }
