@@ -1,11 +1,11 @@
-import {defaultModel} from './model-default.js?v=20260917';
+import {defaultModel} from './model-default.js?v=20260917-voice2';
 import {selectRoleVoice} from './role-voice.js';
 import {AudioCapture} from './audio-capture.js';
 const audioCapture=new AudioCapture();
-import {Conversation} from './conversation.js?v=20260917';
+import {Conversation} from './conversation.js?v=20260917-voice2';
 import {AuthSession,authMessage} from './auth-session.js';
 import { API_BASE } from './config.js';
-import { Voice } from './voice.js?v=20260917';
+import { Voice } from './voice.js?v=20260917-voice2';
 import { checkCustomerText } from './privacy.js';
 
 const $ = selector => document.querySelector(selector);
@@ -75,6 +75,7 @@ function preferences() { return state.user ? `hao.${state.user.uid}.preferences`
 function historyKey() { return `hao.${state.user?.uid}.summaries`; }
 function savePrefs() { localSet(preferences(),{activeId:state.activeId,voiceURI:state.voiceURI,maleVoiceURI:state.maleVoiceURI,femaleVoiceURI:state.femaleVoiceURI,rate:state.rate,voiceConsent:state.voiceConsent,autoSpeak:state.autoSpeak}); }
 function syncVoiceControls(){
+  const start=document.querySelector('[data-action="conversation"]');if(start){start.disabled=!!state.phone?.ended||state.busy||conversation.active;start.textContent=conversation.active?'語音對話進行中':'開始語音對話';}
   const list=voice.chineseVoices;
   for(const [id,preference,label] of [['voice-select','voiceURI','裝置預設中文音色'],['maleVoiceURI','maleVoiceURI','自動選擇台灣中文男聲'],['femaleVoiceURI','femaleVoiceURI','自動選擇台灣中文女聲']]){
     const select=document.getElementById(id);if(!select)continue;
@@ -170,6 +171,7 @@ function render() {
   $('#app').innerHTML=shell((pages[state.route]||comingSoon)());
   if(state.route==='login')setupGoogle();
   const chat=$('#chat-messages');if(chat)chat.scrollTop=chat.scrollHeight;
+  syncVoiceControls();
 }
 function route() {
   const next=location.hash.slice(1)||'home';
@@ -183,10 +185,9 @@ async function work(label, action) {
   const buttons=[...document.querySelectorAll('form button, [data-action="feedback"], [data-action="start-dialogue"], [data-action="import-local"], [data-action="local-login"]')];
   buttons.forEach(b=>{if(b.dataset.action==='voice-stop')return;b.dataset.wasDisabled=String(b.disabled);b.disabled=true;});
   try {await action();}catch(error){state.error=error.message;const e=$('#operation-status');if(e)e.innerHTML=operationError();toast(error.message);}
-  finally{state.busy=false;buttons.forEach(b=>{if(b.dataset.action==='voice-stop')return;b.disabled=b.dataset.wasDisabled==='true';});}
+  finally{state.busy=false;buttons.forEach(b=>{if(b.dataset.action==='voice-stop')return;b.disabled=b.dataset.wasDisabled==='true';});syncVoiceControls();}
 }
 async function sendTurn(text,audio) {
-  voice.stop();
   const message=checkCustomerText(text.trim());
   if(!message)throw new Error('請先說一句話或輸入文字。');
   const phone=state.phone;
@@ -201,7 +202,7 @@ const conversation=new Conversation(voice,async (text,audio)=>{
   if(state.busy)throw new Error('教練仍在回應，請稍後再開始。');
   let answer;await work('已聽到，教練正在回應…',async()=>{answer=await sendTurn(text,audio);});
   if(!answer)throw new Error(state.error||'連線未完成，已暫停語音。');return answer;
-},()=>({prepareAudio:state.phone?.audioConsent?()=>audioCapture.start():null,finishAudio:()=>audioCapture.finish(),cancelAudio:()=>audioCapture.cancel(),voiceURI:currentRoleVoice().voice?.voiceURI||state.voiceURI,rate:state.rate,onText:text=>{const el=$('#message');if(el)el.value=text;}}),toast);
+},()=>({prepareAudio:state.phone?.audioConsent?()=>audioCapture.start():null,finishAudio:()=>audioCapture.finish(),cancelAudio:()=>audioCapture.cancel(),voiceURI:currentRoleVoice().voice?.voiceURI||state.voiceURI,rate:state.rate,onText:text=>{const el=$('#message');if(el)el.value=text;}}),message=>{state.error=message;voice.status=message;voice.onState?.();const status=$('#operation-status');if(status)status.innerHTML=operationError();toast(message);});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)conversation.stop();});
 let theme=localGet('hao.theme','light');
 function applyTheme(){document.documentElement.dataset.theme=theme;}
@@ -251,8 +252,8 @@ document.addEventListener('click',async e=>{
       location.hash='settings';render();
       toast('已保留情境。請確認模型後按「儲存並開始」；更換後的語音演練會開新場次。');
     });
-    if(action==='conversation'&&requireVoiceConsent()){conversation.start('語音已開啟，請開始說話。');}
-    if(action==='replay-reply'&&requireVoiceConsent()){const last=state.phone?.messages.filter(m=>m.role==='assistant').at(-1);conversation.start(last?.content||'語音已開啟，請開始說話。');}
+    if(action==='conversation'&&!state.busy&&requireVoiceConsent()){state.error='';const status=$('#operation-status');if(status)status.textContent='';conversation.start('語音已開啟，請開始說話。');}
+    if(action==='replay-reply'&&!state.busy&&requireVoiceConsent()){conversation.stop();const last=state.phone?.messages.filter(m=>m.role==='assistant').at(-1);conversation.start(last?.content||'語音已開啟，請開始說話。');}
     if(action==='go-login')location.hash='login';
     if(action==='reload-config')await work('正在重新連線…',async()=>{await loadConfig();await loadUser();render();});
     if(action==='close-modal')$('#modal').close();
@@ -264,7 +265,7 @@ document.addEventListener('click',async e=>{
     if(action==='local-login')await work('正在開啟本機測試帳號…',async()=>{await api('/api/auth/local','POST',{});setToken('');await loadUser(true);location.hash='home';render();});
     if(action==='sample') {const examples={family:{gender:'未提供',age:'年約 40 歲',background:'雙薪家庭，有一位學齡孩子，工作忙碌，最近開始關心家庭保障。'},retire:{gender:'未提供',age:'年約 58 歲',background:'預計數年後退休，有成年子女，希望了解退休後生活安排與醫療保障。'},young:{gender:'未提供',age:'年約 26 歲',background:'剛開始工作，收入穩定但預算有限，對保險不熟悉，希望先了解基本保障。'}};state.customer=examples[target.dataset.sample];render();}
     if(action==='use-pain'){state.phoneDraft={purpose:state.pain.answer.pains[Number(target.dataset.index)].opening};state.phone=null;state.feedback=null;location.hash='phone';}
-    if(action==='inspect-key')await work('驗證金鑰並載入目前模型…',async()=>{const key=$('#api-key').value.trim();const provider=$('#provider').value;const r=await api('/api/credentials/inspect','POST',{provider,key});state.models=r.models;state.selectedModel=defaultModel(r.models);state.inspected=true;state.provider=provider;state.localImport=false;state.editingId=null;render();$('#api-key').value=key;if(!r.models.length)toast('目前沒有可用的相容免費模型，請稍後重試。');else if(!state.selectedModel)toast('此 Key 的模型清單未提供 Gemini Flash-Lite Latest，請選擇其他可用模型。');});
+    if(action==='inspect-key')await work('驗證金鑰並載入目前模型…',async()=>{const key=$('#api-key').value.trim();const provider=$('#provider').value;const r=await api('/api/credentials/inspect','POST',{provider,key});state.models=r.models;state.selectedModel=defaultModel(r.models);state.inspected=true;state.provider=provider;state.localImport=false;state.editingId=null;render();$('#api-key').value=key;if(!r.models.length)toast('目前沒有可用的相容免費模型，請稍後重試。');else if(!state.selectedModel)toast('此 Key 的模型清單未提供 Gemini 3.5 Flash Lite，請選擇其他可用模型。');});
     if(action==='select-credential'){state.activeId=target.dataset.id;savePrefs();render();toast('已選用這個連線，下次會記住。');}
     if(action==='edit-credential')await work('重新確認可用模型…',async()=>{const r=await api(`/api/credentials/${target.dataset.id}/models`);state.models=r.models;state.provider=r.credential.provider;state.selectedModel=r.credential.model;state.editingId=r.credential.id;state.localImport=false;state.inspected=true;render();if(!r.models.some(m=>m.id===r.credential.model))toast('上次模型目前不可用，請手動重選。');});
     if(action==='delete-credential')openModal('移除已保存的 Key？',`<p>App 將刪除這把加密 Key 及其模型偏好。若要撤銷金鑰，仍需到原平台操作。</p>${btn('確定移除','confirm-delete-key','danger',`data-id="${target.dataset.id}"`)}`);
