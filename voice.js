@@ -58,9 +58,20 @@ export class Voice {
       if(!failed)onEnd?.(finalText);
     };
     rec.lang = 'zh-TW'; rec.continuous = false; rec.interimResults = true;
-    rec.onstart = () => { if(this.recognition!==rec)return;clearTimeout(this.timer);this.timer=setTimeout(requestEnd,45000); this.listening = true; this.status = '正在聆聽… 請說話，說完會自動送出'; this.onState?.(); };
+    const stalled=()=>{
+      if(this.recognition!==rec||stopping)return;
+      this.recognition=null;clearTimeout(this.timer);clearTimeout(this.endTimer);
+      try{rec.abort();}catch{}
+      this.listening=false;this.status='收音尚未取得文字，正在重新連接…';this.onState?.();
+      if(onEnd)onEnd('',{reason:'stalled'});else onError?.('收音沒有取得文字，請重新接通收音。');
+    };
+    const arm=()=>{clearTimeout(this.timer);this.timer=setTimeout(stalled,12000);};
+    rec.onstart = () => { if(this.recognition!==rec)return;arm(); this.listening = false; this.status = '正在連接麥克風…'; this.onState?.(); };
+    rec.onaudiostart = () => {if(this.recognition!==rec||stopping)return;arm();this.listening=true;this.status='麥克風已接通，請說話…';this.onState?.();};
     rec.onresult = e => {
       if(this.recognition!==rec)return;
+      if(stopping)return;
+      arm();this.listening=true;this.status='正在辨識你的話…';this.onState?.();
       let text = ''; let final = false;
       for (let i = 0; i < e.results.length; i++) { text += e.results[i][0].transcript; final ||= e.results[i].isFinal; }
       onText(text, final);
